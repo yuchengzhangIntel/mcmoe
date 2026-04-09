@@ -412,5 +412,11 @@ if __name__ == "__main__":
         saving_path = args.saving_path + f"Mixtral-8x7B-v0.1-atten_{args.attn_bits}-e_{average_bits}"
         tokenizer = AutoTokenizer.from_pretrained(args.model)
         tokenizer.save_pretrained(saving_path)
-        from utils.pack import save_quantized
-        save_quantized(model, saving_path)
+        if args.pack:
+            from utils.pack import save_quantized
+            save_quantized(model, saving_path)
+        else:
+            # Pseudo-quantized models keep standard nn.Linear layers; save with
+            # the native HuggingFace method so they can be reloaded via
+            # AutoModelForCausalLM.from_pretrained().
+            model.save_pretrained(saving_path)
