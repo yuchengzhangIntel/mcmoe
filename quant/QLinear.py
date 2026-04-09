@@ -419,7 +419,23 @@ class QLinear(nn.Module):
         return self
 
     def to(self, *args, **kwargs):
-        # TODO: later
+        # Parse the target device from positional or keyword arguments so that
+        # ``module.to(device)`` and ``module.to("cpu")`` move quantised data
+        # correctly.  We intentionally ignore dtype changes here because the
+        # packed integer weights must not be cast.
+        device = None
+        if args:
+            first = args[0]
+            if isinstance(first, (str, torch.device)):
+                device = torch.device(first)
+            elif isinstance(first, torch.dtype):
+                # dtype-only call – nothing to do for packed weights
+                pass
+        if device is None and "device" in kwargs:
+            device = torch.device(kwargs["device"])
+
+        if device is not None and self.ready and self.W_q is not None:
+            return self._move_to(device)
         return self
 
     # TODO: later
@@ -445,7 +461,42 @@ class QLinear(nn.Module):
         return self
 
     def cpu(self):
-        # TODO: later
+        if self.ready and self.W_q is not None:
+            return self._move_to(torch.device("cpu"))
+        return self
+
+    # ------------------------------------------------------------------
+    # Internal helper: move all quantised data to *device*.
+    # ------------------------------------------------------------------
+    def _move_to(self, device: torch.device):
+        """Move packed weights, meta tensors, and bias to *device*."""
+        def _move_tensor(t, dev):
+            if torch.is_tensor(t):
+                return t.to(dev)
+            return t
+
+        if self.W_q is not None:
+            if isinstance(self.W_q, nn.Parameter):
+                self.W_q = nn.Parameter(_move_tensor(self.W_q.data, device), requires_grad=False)
+            else:
+                self.W_q = _move_tensor(self.W_q, device)
+
+        if self.meta is not None:
+            for key in list(self.meta.keys()):
+                val = self.meta[key]
+                if torch.is_tensor(val):
+                    self.meta[key] = val.to(device)
+                elif isinstance(val, dict):
+                    # nested meta dicts (meta_zero, meta_scale)
+                    for k2 in list(val.keys()):
+                        if torch.is_tensor(val[k2]):
+                            val[k2] = val[k2].to(device)
+
+        if self.bias is not None:
+            self.bias = _move_tensor(self.bias, device)
+
+        self.device = device
+        self.in_gpu = (device.type == "cuda") if isinstance(device, torch.device) else ("cuda" in str(device))
         return self
 
     def state_dict(self, *args, **kwargs):  # nn.Module override compatible
