@@ -13,73 +13,101 @@ import gc
 _IGNORE_LINEAR = ["lm_head"]
 _QUANT_LAYERS = [nn.Linear, QLinear]
 
-def get_linear_tags():
-        return [
-            "self_attn.q_proj",
-            "self_attn.k_proj",
-            "self_attn.v_proj",
-            "self_attn.o_proj",
-            "block_sparse_moe.experts.w1",
-            "block_sparse_moe.experts.w2",
-            "block_sparse_moe.experts.w3",
-        ]
+# ---------------------------------------------------------------------------
+# Mixtral helpers (kept for backward compatibility)
+# ---------------------------------------------------------------------------
+
+_MIXTRAL_LINEAR_TAGS = [
+    "self_attn.q_proj",
+    "self_attn.k_proj",
+    "self_attn.v_proj",
+    "self_attn.o_proj",
+    "block_sparse_moe.experts.w1",
+    "block_sparse_moe.experts.w2",
+    "block_sparse_moe.experts.w3",
+]
+
+# ---------------------------------------------------------------------------
+# Qwen2-MoE / Qwen3-MoE helpers
+# ---------------------------------------------------------------------------
+
+_QWEN_MOE_LINEAR_TAGS = [
+    "self_attn.q_proj",
+    "self_attn.k_proj",
+    "self_attn.v_proj",
+    "self_attn.o_proj",
+    "mlp.shared_expert.gate_proj",
+    "mlp.shared_expert.up_proj",
+    "mlp.shared_expert.down_proj",
+    "mlp.experts.gate_proj",
+    "mlp.experts.up_proj",
+    "mlp.experts.down_proj",
+]
+
+
+def _is_qwen_moe(model) -> bool:
+    """Return True if the model is a Qwen2-MoE or Qwen3-MoE variant."""
+    model_type = getattr(getattr(model, "config", None), "model_type", "")
+    return model_type in {"qwen2_moe", "qwen3_moe"}
+
+
+def get_linear_tags(model=None):
+    if model is not None and _is_qwen_moe(model):
+        return list(_QWEN_MOE_LINEAR_TAGS)
+    return list(_MIXTRAL_LINEAR_TAGS)
+
+
+def _resolve_module(root, dotted_name: str):
+    """Walk *root* following *dotted_name* and return (parent, attr_name)."""
+    parts = dotted_name.split(".")
+    parent = root
+    try:
+        for part in parts[:-1]:
+            parent = parent[int(part)] if part.isdigit() else getattr(parent, part)
+    except (AttributeError, IndexError, KeyError) as exc:
+        raise type(exc)(f"Failed to resolve module path '{dotted_name}': {exc}") from exc
+    return parent, parts[-1]
+
+
+def _is_leaf(module: nn.Module) -> bool:
+    return len(list(module.children())) == 0
+
+
+# ---------------------------------------------------------------------------
+# Generic patching – works for any architecture
+# ---------------------------------------------------------------------------
 
 def patch_nonlinearlayers(model, patch_fct, verbose=True):
-        base_model = model.model
-        model.lm_head = patch_fct(model.lm_head)  ###
-        base_model.embed_tokens = patch_fct(base_model.embed_tokens)
+    """Patch every leaf module that is *not* a quantisable linear layer."""
+    base_model = model.model
+    model.lm_head = patch_fct(model.lm_head)
+    base_model.embed_tokens = patch_fct(base_model.embed_tokens)
+    if hasattr(base_model, "norm") and base_model.norm is not None:
         base_model.norm = patch_fct(base_model.norm)
 
-        layers = base_model.layers
-        print(layers)
-        for i in tqdm(range(len(layers)), disable=not verbose):
-            layers[i].self_attn.rotary_emb = patch_fct(layers[i].self_attn.rotary_emb)
-            layers[i].input_layernorm = patch_fct(layers[i].input_layernorm)
-            layers[i].post_attention_layernorm = patch_fct(
-                layers[i].post_attention_layernorm
-            )
+    layers = base_model.layers
+    for i in tqdm(range(len(layers)), disable=not verbose):
+        for name, module in list(layers[i].named_modules()):
+            if not _is_leaf(module):
+                continue
+            if isinstance(module, tuple(_QUANT_LAYERS)):
+                continue  # handled by patch_linearlayers
+            parent, attr = _resolve_module(layers[i], name)
+            setattr(parent, attr, patch_fct(getattr(parent, attr)))
 
-            layers[i].block_sparse_moe.gate = patch_fct(
-                layers[i].block_sparse_moe.gate
-            )  # Keep MOE gate as fp16 because it's small
 
-            n_experts = len(layers[i].block_sparse_moe.experts)
-            for k in range(n_experts):
-                layers[i].block_sparse_moe.experts[k].act_fn = patch_fct(
-                    layers[i].block_sparse_moe.experts[k].act_fn
-                )
-
-def patch_linearlayers( model, patch_fct, patch_params, verbose=True):
+def patch_linearlayers(model, patch_fct, patch_params, verbose=True):
+    """Patch every leaf ``nn.Linear`` / ``QLinear`` inside each decoder layer."""
     base_model = model.model
     layers = base_model.layers
     for i in tqdm(range(len(layers)), disable=not verbose):
-        layers[i].self_attn.q_proj = patch_fct(
-            layers[i].self_attn.q_proj, patch_params["self_attn.q_proj"]
-        )
-        layers[i].self_attn.k_proj = patch_fct(
-            layers[i].self_attn.k_proj, patch_params["self_attn.k_proj"]
-        )
-        layers[i].self_attn.v_proj = patch_fct(
-            layers[i].self_attn.v_proj, patch_params["self_attn.v_proj"]
-        )
-        layers[i].self_attn.o_proj = patch_fct(
-            layers[i].self_attn.o_proj, patch_params["self_attn.o_proj"]
-        )
-
-        n_experts = len(layers[i].block_sparse_moe.experts)
-        for k in range(n_experts):
-            layers[i].block_sparse_moe.experts[k].w1 = patch_fct(
-                layers[i].block_sparse_moe.experts[k].w1,
-                patch_params["block_sparse_moe.experts.w1"],
-            )
-            layers[i].block_sparse_moe.experts[k].w2 = patch_fct(
-                layers[i].block_sparse_moe.experts[k].w2,
-                patch_params["block_sparse_moe.experts.w2"],
-            )
-            layers[i].block_sparse_moe.experts[k].w3 = patch_fct(
-                layers[i].block_sparse_moe.experts[k].w3,
-                patch_params["block_sparse_moe.experts.w3"],
-            )
+        for name, module in list(layers[i].named_modules()):
+            if not isinstance(module, tuple(_QUANT_LAYERS)):
+                continue
+            tag = name_to_linear_tag(name)
+            params = patch_params.get(tag)
+            parent, attr = _resolve_module(layers[i], name)
+            setattr(parent, attr, patch_fct(getattr(parent, attr), params))
 
 def autoname_modules( model) -> None:
     for name, module in model.named_modules():
@@ -101,7 +129,7 @@ def get_linear_tags_from_model(model, ignore: list) -> list:
 
 def set_auto_linear_tags(model, ignore: list = _IGNORE_LINEAR) -> None:
         if hasattr(model, "linear_tags") is False:
-            linear_tags = get_linear_tags()
+            linear_tags = get_linear_tags(model)
             model.linear_tags = (
                 linear_tags
                 if len(linear_tags) > 0

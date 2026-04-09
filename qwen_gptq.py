@@ -498,7 +498,16 @@ def maybe_save(model, tokenizer, args):
 
     os.makedirs(args.saving_path, exist_ok=True)
     tokenizer.save_pretrained(args.saving_path)
-    save_quantized(model, args.saving_path)
+
+    if args.pack:
+        # Packed models use QLinear layers with custom serialization.
+        save_quantized(model, args.saving_path)
+    else:
+        # Pseudo-quantized models keep standard nn.Linear layers whose weights
+        # have been rounded in-place.  Save with the native HuggingFace method
+        # so the checkpoint can be reloaded with AutoModelForCausalLM.from_pretrained().
+        model.save_pretrained(args.saving_path)
+
     print(f"Saved quantized model to {args.saving_path}")
 
 
