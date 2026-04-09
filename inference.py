@@ -61,8 +61,11 @@ def _resolve_module(root, dotted_name: str):
     """Walk *root* following *dotted_name* and return (parent, attr_name)."""
     parts = dotted_name.split(".")
     parent = root
-    for part in parts[:-1]:
-        parent = parent[int(part)] if part.isdigit() else getattr(parent, part)
+    try:
+        for part in parts[:-1]:
+            parent = parent[int(part)] if part.isdigit() else getattr(parent, part)
+    except (AttributeError, IndexError, KeyError) as exc:
+        raise type(exc)(f"Failed to resolve module path '{dotted_name}': {exc}") from exc
     return parent, parts[-1]
 
 

@@ -496,7 +496,7 @@ class QLinear(nn.Module):
             self.bias = _move_tensor(self.bias, device)
 
         self.device = device
-        self.in_gpu = (device.type == "cuda") if isinstance(device, torch.device) else ("cuda" in str(device))
+        self.in_gpu = device.type == "cuda"
         return self
 
     def state_dict(self, *args, **kwargs):  # nn.Module override compatible
