@@ -1,4 +1,5 @@
 import random
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -90,7 +91,10 @@ def get_c4(nsamples, seed, seqlen, model, tokenizer):
 
 def get_loaders(name, nsamples=128, seed=0, seqlen=2048, model=''):
     model_name = model.split('/')[-1]
-    cache_file=f'/mnt/afs/yliao/Tasks/moe/Expert_Quant/moeq/cache/{name}_{nsamples}_{seed}_{seqlen}/Mixtral-8x7B-v0.1.pt'
+    cache_root = Path(__file__).resolve().parent / "data" / ".cache"
+    safe_model_name = model_name.replace("/", "_").replace("\\", "_") if model_name else "unknown_model"
+    cache_dir = cache_root / safe_model_name / f'{name}_{nsamples}_{seed}_{seqlen}'
+    cache_file = cache_dir / 'loader.pt'
     try:
         test_enc = torch.load(cache_file)
         return test_enc
@@ -112,16 +116,14 @@ def get_loaders(name, nsamples=128, seed=0, seqlen=2048, model=''):
         mixed_loader=wiki_train+ptb_train+c4_train
         val=None
 
-        directory='/'.join(cache_file.split('/')[:-1])
-        if not os.path.exists(directory):
-            os.makedirs(directory)
+        if not cache_dir.exists():
+            cache_dir.mkdir(parents=True, exist_ok=True)
         torch.save((mixed_loader, val),cache_file)
 
         return mixed_loader, val
 
-    directory='/'.join(cache_file.split('/')[:-1])
-    if not os.path.exists(directory):
-        os.makedirs(directory)
+    if not cache_dir.exists():
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
     torch.save(loaders,cache_file)
     return loaders

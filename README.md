@@ -38,6 +38,25 @@ We provide the solved bit-width for each expert of **Mixtral 8 $\times$ 7b** in 
 
 ## Usage
 
+### Qwen2-MoE / Qwen3-MoE with GPTQ
+
+The original [main.py](main.py) remains Mixtral-specific. For Qwen2-MoE and Qwen3-MoE, use the dedicated [qwen_gptq.py](qwen_gptq.py) entrypoint. It keeps only the GPTQ workflow, lets you assign attention and MoE bit-widths independently, and leaves router weights unquantized.
+
+```sh
+Model_Path="/path/to/Qwen2-MoE-or-Qwen3-MoE"
+python qwen_gptq.py ${Model_Path} --attn_bits 4 --moe_bits 2 --dataset wikitext2 --groupsize 128 --batch_size 1 --eval_ppl
+```
+
+To run downstream tasks with `lm_eval`, add `--tasks`:
+
+```sh
+python qwen_gptq.py ${Model_Path} --attn_bits 4 --moe_bits 2 --dataset wikitext2 --groupsize 128 --batch_size 4 --pack --tasks hellaswag,piqa --lm_eval_batch_size auto
+```
+
+If you need packed checkpoints, add `--save --saving_path /path/to/output_dir`.
+
+There is also a ready-to-run launcher script at [scripts/qwen_gptq_eval.sh](scripts/qwen_gptq_eval.sh). It defaults to pseudo-quantization plus perplexity evaluation, and selects the GPU via `CUDA_VISIBLE_DEVICES` instead of a Python-side device flag.
+
 **Quickly get the compressed model `./scripts/quant.sh`**. We have already provided all the needed middle results of **Mixtral 8 $\times$ 7b** in this code.
 
 ```sh
