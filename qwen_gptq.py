@@ -222,13 +222,35 @@ def collect_layer_inputs(model, input_batches: Iterable[torch.Tensor], nsamples:
 
 
 def classify_linear_layer(name: str):
-    if ".self_attn." in name:
-        return "attn"
-    if ".mlp." not in name:
+    name_parts = name.split(".")
+    if not name_parts:
         return None
-    if ".mlp.gate" in name or ".mlp.shared_expert_gate" in name:
+    if name_parts[0] == "self_attn":
+        return "attn"
+    if name_parts[0] != "mlp":
+        return None
+    if len(name_parts) >= 2 and name_parts[1] in {"gate", "shared_expert_gate"}:
         return "router"
     return "moe"
+
+
+def summarize_discovered_modules(full):
+    summary = {"attn": [], "moe": [], "router": [], "ignored": []}
+    for name in full:
+        category = classify_linear_layer(name)
+        if category is None:
+            summary["ignored"].append(name)
+        else:
+            summary[category].append(name)
+    return summary
+
+
+def format_module_examples(names, limit: int = 6):
+    if not names:
+        return "none"
+    sample = names[:limit]
+    suffix = " ..." if len(names) > limit else ""
+    return ", ".join(sample) + suffix
 
 
 def resolve_module_path(root, module_name: str):
@@ -275,6 +297,21 @@ def qwen_sequential(model, dataloader, device: str, args):
         layer = layers[index].to(device)
         full = find_layers(layer)
         subset = {}
+        summary = summarize_discovered_modules(full)
+
+        print(
+            "Discovered linears: "
+            f"total={len(full)}, "
+            f"attn={len(summary['attn'])}, "
+            f"moe={len(summary['moe'])}, "
+            f"router={len(summary['router'])}, "
+            f"ignored={len(summary['ignored'])}"
+        )
+        print(f"  attn examples: {format_module_examples(summary['attn'])}")
+        print(f"  moe examples: {format_module_examples(summary['moe'])}")
+        print(f"  router examples: {format_module_examples(summary['router'])}")
+        if summary["ignored"]:
+            print(f"  ignored examples: {format_module_examples(summary['ignored'])}")
 
         for name, module in full.items():
             category = classify_linear_layer(name)
@@ -283,6 +320,9 @@ def qwen_sequential(model, dataloader, device: str, args):
                 continue
             if category in {"attn", "moe"}:
                 subset[name] = (module, category)
+
+        if not subset:
+            print("Warning: no quantizable linear modules matched this layer.")
 
         gptq = {}
         for name, (module, category) in subset.items():
