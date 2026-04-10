@@ -166,8 +166,7 @@ class GPTQ:
                 Losses1[:, i] = (w - q_r)**2 / d**2
                 err1 = (w - q_r) / d
 
-                if self.wbits > 3:
-                    W1[:, i:] -= err1.unsqueeze(1).matmul(Hinv1[i, i:].unsqueeze(0))
+                W1[:, i:] -= err1.unsqueeze(1).matmul(Hinv1[i, i:].unsqueeze(0))
                 
                 Err1[:, i] = err1
 
